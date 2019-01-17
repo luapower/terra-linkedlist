@@ -6,14 +6,16 @@ local intlist = list(int)
 
 terra f()
 	var list: intlist = nil
-	var link1 = list:insert_first(12)
-	var link2 = list:insert_after(link1, 13)
-	print(link1, link2-link1)
-	var link3 = list:insert_last(14)
-	print(list.first, list.last)
-	print(link1, link2-link1, link3-link2)
-	--for v in list do
-	--	print(v)
-	--end
+	var i1 = list:insert_first(12)
+	var i2 = list:insert_after(i1, 14)
+	var i3 = list:insert_before(i2, 13)
+	print() for v in list do print(@v) end
+	list:remove(i3)
+	print() for v in list do print(@v) end
+	list:remove_last()
+	print() for v in list do print(@v) end
+	list:remove_first()
+	print() for v in list do print(@v) end
+	print'done'
 end
 f()
