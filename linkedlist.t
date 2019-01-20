@@ -7,11 +7,12 @@
 
 --[[  API
 
-	local D = linkedlist{item_type=int, size_type=int, C=require'low'}
+	local D = linkedlist{item_t=, size_t=int, C=require'low'}
 	var d: D = nil -- =nil is imortant!
-	d:clear()
 	d:free()
+	d:clear()
 	d:preallocate(size) -> ok?
+	d:shrink()
 	d.count
 
 	d:at(i) -> &v|nil
@@ -46,7 +47,7 @@ local function list_type(T, size_t, C)
 	local struct link {
 		next: size_t;
 		prev: size_t;
-		item: T;
+		item: T; --TODO: make item optional
 	};
 
 	local links = arr{T = link, size_t = size_t, C = C}
@@ -95,6 +96,20 @@ local function list_type(T, size_t, C)
 	terra list:preallocate(size: size_t)
 		return self.links:preallocate(size)
 			and self.freelinks:preallocate(size)
+	end
+
+	--NOTE: shrinking invalidates the indices!
+	terra list:shrink(): bool
+		assert(false, 'NYI')
+		if self.freelinks.len == 0 then return true end
+		--TODO: move links over to the empty slots to close the gaps.
+		self.links.len = self.count
+		self.freelinks:free()
+		return self.links:shrink()
+	end
+
+	terra list:__memsize(): size_t
+		return sizeof(list) + self.links:__memsize() + self.freelinks:__memsize()
 	end
 
 	--value access
@@ -283,7 +298,8 @@ local list_type = function(T, size_t, C)
 	if terralib.type(T) == 'table' then
 		T, size_t, C = T.T, T.size_t, T.C
 	end
-	return list_type(T or int, size_t or int, C or require'low')
+	assert(T)
+	return list_type(T, size_t or int, C or require'low')
 end
 
 return list_type
