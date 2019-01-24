@@ -163,7 +163,7 @@ local function list_type(T, size_t, C)
 		if self.freelinks.len > 0 then
 			return self.freelinks:pop()
 		else
-			return iif(self.links:push() ~= nil, self.links.len-1, -1)
+			return iif(self.links:push_junk() ~= nil, self.links.len-1, -1)
 		end
 	end
 
