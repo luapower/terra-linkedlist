@@ -63,18 +63,12 @@ local function list_type(T, size_t, C)
 
 	--memory management
 
-	function list.metamethods.__cast(from, to, exp)
-		if from == niltype or from:isunit() then
-			return `list {
-				links=nil,
-				freelinks=nil,
-				first_index=-1,
-				last_index=-1,
-				count=0,
-			}
-		else
-			error'invalid cast'
-		end
+	terra list:init()
+		self.links:init()
+		self.freelinks:init()
+		self.first_index = -1
+		self.last_index = -1
+		self.count = 0
 	end
 
 	terra list:free() --can be reused after free
@@ -91,6 +85,14 @@ local function list_type(T, size_t, C)
 		self.first_index = -1
 		self.last_index = -1
 		self.count = 0
+	end
+
+	function list.metamethods.__cast(from, to, exp)
+		if from == niltype then
+			return quote var l: list; l:init() in l end
+		else
+			error'invalid cast'
+		end
 	end
 
 	terra list:preallocate(size: size_t)
