@@ -80,8 +80,8 @@ local function list_type(T, size_t, C)
 	end
 
 	terra list:clear()
-		self.links:clear()
-		self.freelinks:clear()
+		self.links.len = 0
+		self.freelinks.len = 0
 		self.first_index = -1
 		self.last_index = -1
 		self.count = 0
@@ -96,8 +96,8 @@ local function list_type(T, size_t, C)
 	end
 
 	terra list:preallocate(size: size_t)
-		return self.links:preallocate(size)
-			and self.freelinks:preallocate(size)
+		self.links.min_capacity = size
+		self.freelinks.min_capacity = size
 	end
 
 	--NOTE: shrinking invalidates the indices!
@@ -107,7 +107,7 @@ local function list_type(T, size_t, C)
 		--TODO: move links over to the empty slots to close the gaps.
 		self.links.len = self.count
 		self.freelinks:free()
-		return self.links:shrink()
+		self.links.capacity = self.links.len
 	end
 
 	terra list:__memsize(): size_t
@@ -165,7 +165,8 @@ local function list_type(T, size_t, C)
 		if self.freelinks.len > 0 then
 			return self.freelinks:pop()
 		else
-			return iif(self.links:push_junk() ~= nil, self.links.len-1, -1)
+			self.links:add()
+			return self.links.len-1
 		end
 	end
 
