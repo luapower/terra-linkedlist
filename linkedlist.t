@@ -11,8 +11,7 @@
 	var d: D = nil -- =nil is imortant!
 	d:free()
 	d:clear()
-	d:preallocate(size) -> ok?
-	d:shrink()
+	d.min_capacity
 	d.count
 
 	d:at(i) -> &v|nil
@@ -38,11 +37,9 @@
 
 if not ... then require'linkedlist_test'; return end
 
-local overload = terralib.overloadedfunction
+setfenv(1, require'low')
 
 local function list_type(T, size_t, C)
-
-	setfenv(1, C)
 
 	local struct link {
 		next: size_t;
@@ -50,10 +47,10 @@ local function list_type(T, size_t, C)
 		item: T; --TODO: make item optional
 	};
 
-	local links = arr{T = link, size_t = size_t, C = C}
-	local freelinks = arr{T = size_t, size_t = size_t, C = C}
+	local links = arr{T = link, size_t = size_t}
+	local freelinks = arr{T = size_t, size_t = size_t}
 
-	local struct list {
+	local struct list (gettersandsetters) {
 		links: links;
 		freelinks: freelinks;
 		first_index: size_t;
@@ -61,22 +58,18 @@ local function list_type(T, size_t, C)
 		count: size_t;
 	}
 
+	list.empty = `list{
+		links = links(nil);
+		freelinks = freelinks(nil);
+		first_index = -1;
+		last_index = -1;
+		count = 0;
+	}
+
 	--memory management
 
 	terra list:init()
-		self.links:init()
-		self.freelinks:init()
-		self.first_index = -1
-		self.last_index = -1
-		self.count = 0
-	end
-
-	terra list:free() --can be reused after free
-		self.links:free()
-		self.freelinks:free()
-		self.first_index = -1
-		self.last_index = -1
-		self.count = 0
+		@self = [list.empty]
 	end
 
 	terra list:clear()
@@ -87,27 +80,22 @@ local function list_type(T, size_t, C)
 		self.count = 0
 	end
 
+	terra list:free() --can be reused after free
+		self:clear()
+		self.links:free()
+		self.freelinks:free()
+	end
+
 	function list.metamethods.__cast(from, to, exp)
 		if from == niltype then
-			return quote var l: list; l:init() in l end
-		else
-			error'invalid cast'
+			return list.empty
 		end
+		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 	end
 
-	terra list:preallocate(size: size_t)
+	terra list:set_min_capacity(size: size_t)
 		self.links.min_capacity = size
 		self.freelinks.min_capacity = size
-	end
-
-	--NOTE: shrinking invalidates the indices!
-	terra list:shrink(): bool
-		assert(false, 'NYI')
-		if self.freelinks.len == 0 then return true end
-		--TODO: move links over to the empty slots to close the gaps.
-		self.links.len = self.count
-		self.freelinks:free()
-		self.links.capacity = self.links.len
 	end
 
 	terra list:__memsize(): size_t
@@ -116,24 +104,20 @@ local function list_type(T, size_t, C)
 
 	--value access
 
-	list.methods.at = macro(function(self, i)
-		return quote
-			var link = self.links:at(i)
-			in iif(link ~= nil, &link.item, nil)
-		end
+	list.methods.at = overload'at'
+	list.methods.at:adddefinition(terra(self: &list, i: size_t)
+		return &self.links:at(i).item
 	end)
-	list.methods.get = macro(function(self, i, default)
-		if default then
-			return quote
-				var item = self:at(i)
-				in iif(item ~= nil, item, default)
-			end
-		else
-			return quote
-				var item = self:at(i)
-				return item
-			end
-		end
+	list.methods.at:adddefinition(terra(self: &list, i: size_t, default: &T)
+		var link = self.links:at(i, nil)
+		return iif(link ~= nil, &link.item, default)
+	end)
+	list.methods.get = overload'get'
+	list.methods.get:adddefinition(terra(self: &list, i: size_t)
+		return @self:at(i)
+	end)
+	list.methods.get:adddefinition(terra(self: &list, i: size_t, default: T)
+		return @self:at(i, &default)
 	end)
 	list.metamethods.__apply = list.methods.get
 
@@ -297,12 +281,12 @@ local function list_type(T, size_t, C)
 end
 list_type = terralib.memoize(list_type)
 
-local list_type = function(T, size_t, C)
+local list_type = function(T, size_t)
 	if terralib.type(T) == 'table' then
-		T, size_t, C = T.T, T.size_t, T.C
+		T, size_t = T.T, T.size_t
 	end
 	assert(T)
-	return list_type(T, size_t or int, C or require'low')
+	return list_type(T, size_t or int)
 end
 
 return list_type
