@@ -5,32 +5,39 @@
 
 	Implemented using a dynarray and a freelist, which means that the location
 	of the elements in memory is not stable between inserts unless the list is
-	preallocated and doesn't grow.
+	preallocated and doesn't grow. Indices are stable though and can be used
+	to retrieve the same element after any number of mutations.
 
-	local list_type = list(T, [size_t=int])     create a list type
+	local list_type = list(T,[size_t=int])      create a list type
 	var list = list_type(nil)                   create a list object
-	var list = list(T, [size_t])                create a list object
+	var list = list(T,[size_t])                 create a list object
 
 	list:init()                                 initialize (for struct members)
 	list:clear()                                remove items, keep the memory
 	list:free()                                 free (items are not freed!)
 	list.min_capacity                           (write/only) grow capacity
 
-	list.first -> &e                            first element
-	list.last  -> &e                            last element
+	list:index(i|&e) -> i                       index of valid element
+	list:at(i) -> &e                            element at valid index
 
-	list:next(&e) -> &e                         next element
-	list:prev(&e) -> &e                         prev element
+	list.first_index <-> i                      (read/write) index of first element
+	list.last_index  <-> i                      (read/write) index of last element
+	list:next_index(i|&e) -> i                  index of next element
+	list:prev_index(i|&e) -> i                  index of prev element
 
-	for &e in list do ... end                   iterate elements (remove() works inside)
-	for &e in list:backwards() do ... end       iterate backwards (remove() works inside)
+	list.first <-> &e                           (read/write) first element
+	list.last  <-> &e                           (read/write) last element
+	list:next(i|&e) -> &e                       next element
+	list:prev(i|&e) -> &e                       prev element
 
-	list:insert_before([&e][, &v]) -> &v        insert v before e|first
-	list:insert_after([&e][, &v]) -> &v         insert v after e|last
-	list:insert_first([&v]) -> &v               insert at the front
-	list:insert_last([&v]) -> &v                insert at the back
-	list:remove(&e)                             remove element
-	list:make_first(&e)                         move element to front
+	for i,&e in list do ... end                 iterate elements (remove() works inside)
+	for i,&e in list:backwards() do ... end     iterate backwards (remove() works inside)
+
+	list:insert_before(i[,v|&v]) -> &e          insert v before i|first
+	list:insert_after(i[,v|&v]) -> &e           insert v after i|last
+	list:insert_first([v|&v]) -> &e             insert at the front
+	list:insert_last([v|&v]) -> &e              insert at the back
+	list:remove(i|&e)                           remove element
 
 ]]
 
@@ -42,26 +49,26 @@ local function list_type(T, size_t)
 
 	local struct link {
 		item: T; --must be the first field!
-		_next: size_t;
-		_prev: size_t;
+		next_index: size_t;
+		prev_index: size_t;
 	}
 
 	local links = arr{T = link, size_t = size_t}
-	local freelinks = arr{T = size_t, size_t = size_t}
+	local free_indices = arr{T = size_t, size_t = size_t}
 
 	local struct list (gettersandsetters) {
 		links: links;
-		freelinks: freelinks;
-		_first: size_t;
-		_last: size_t;
+		free_indices: free_indices;
+		first_index: size_t;
+		last_index: size_t;
 		count: size_t;
 	}
 
 	list.empty = `list {
 		links = links(nil);
-		freelinks = freelinks(nil);
-		_first = -1;
-		_last = -1;
+		free_indices = free_indices(nil);
+		first_index = -1;
+		last_index = -1;
 		count = 0;
 	}
 
@@ -72,26 +79,63 @@ local function list_type(T, size_t)
 		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 	end
 
-	terra list:get_first()
-		return iif(self._first ~= -1, &self.links:at(self._first).item, nil)
-	end
-	terra list:get_last()
-		return iif(self._last ~= -1, &self.links:at(self._last).item, nil)
-	end
-	terra list:next(e: &T)
-		return iif(e ~= nil, [&T](self.links:at([&link](e)._next, nil)), nil)
-	end
-	terra list:prev(e: &T)
-		return iif(e ~= nil, [&T](self.links:at([&link](e)._prev, nil)), nil)
-	end
+	--assert that the link is valid, i.e. is within range and has not been deleted
+	local assert_valid = macro(function(self, i, e)
+		return quote
+			assert(e.next_index ~= -1 or e.prev_index ~= -1 or i == self.first_index)
+			in e
+		end
+	end)
+
+	list.methods.index = overload'index'
+	list.methods.index:adddefinition(terra(self: &list, i: size_t)
+		assert_valid(self, i, self.links:at(i))
+		return i
+	end)
+	list.methods.index:adddefinition(terra(self: &list, e: &T)
+		var i = self.links:index([&link](e))
+		assert_valid(self, i, [&link](e))
+		return i
+	end)
+
+	list.methods.at = macro(function(self, i)
+		return `[&T](assert_valid(self, i, self.links:at(i)))
+	end)
+
+	list.methods.get_first = macro(function(self)
+		return `iif(self.first_index ~= -1, [&T](self.links:at(self.first_index)), nil)
+	end)
+	list.methods.get_last = macro(function(self)
+		return `iif(self.last_index ~= -1, [&T](self.links:at(self.last_index)), nil)
+	end)
+
+	list.methods.next_index = macro(function(self, x)
+		return `self.links.elements[self:index(x)].next_index
+	end)
+	list.methods.prev_index = macro(function(self, x)
+		return `self.links.elements[self:index(x)].prev_index
+	end)
+
+	list.methods.next = macro(function(self, x)
+		return quote
+			var n = self:next_index(x)
+			in iif(n ~= -1, [&T](self.links:at(n)), nil)
+		end
+	end)
+	list.methods.prev = macro(function(self, x)
+		return quote
+			var n = self:prev_index(x)
+			in iif(n ~= -1, [&T](self.links:at(n)), nil)
+		end
+	end)
 
 	list.metamethods.__for = function(self, body)
 		return quote
-			var i = self._first
+			var i = self.first_index
 			while i ~= -1 do
 				var e = self.links:at(i)
-				var n = e._next
-				[ body(`[&T](e)) ]
+				var n = e.next_index --allow self:remove(e) in body
+				[ body(i, `[&T](e)) ]
 				i = n
 			end
 		end
@@ -100,11 +144,11 @@ local function list_type(T, size_t)
 	local struct backwards {list: &list}
 	backwards.metamethods.__for = function(self, body)
 		return quote
-			var i = self.list._last
+			var i = self.list.last_index
 			while i ~= -1 do
 				var e = self.list.links:at(i)
-				var p = e._prev
-				[ body(`[&T](e)) ]
+				var p = e.prev_index --allow self:remove(e) in body
+				[ body(i, `[&T](e)) ]
 				i = p
 			end
 		end
@@ -117,33 +161,33 @@ local function list_type(T, size_t)
 
 	terra list:clear()
 		self.links.len = 0
-		self.freelinks.len = 0
-		self._first = -1
-		self._last = -1
+		self.free_indices.len = 0
+		self.first_index = -1
+		self.last_index = -1
 		self.count = 0
 	end
 
 	terra list:free()
 		self:clear()
 		self.links:free()
-		self.freelinks:free()
+		self.free_indices:free()
 	end
 
 	terra list:set_min_capacity(size: size_t)
 		self.links.min_capacity = size
-		self.freelinks.min_capacity = size
+		self.free_indices.min_capacity = size
 	end
 
 	terra list:__memsize()
 		return sizeof(list)
 			- sizeof(links) + memsize(self.links)
-			- sizeof(freelinks) + memsize(self.freelinks)
+			- sizeof(free_indices) + memsize(self.free_indices)
 	end
 
 	terra list:_newlink()
 		self.count = self.count + 1
-		if self.freelinks.len > 0 then
-			return self.freelinks:pop()
+		if self.free_indices.len > 0 then
+			return self.free_indices:pop()
 		else
 			self.links:add()
 			return self.links.len-1
@@ -152,115 +196,128 @@ local function list_type(T, size_t)
 
 	terra	list:_freelink(i: size_t)
 		self.count = self.count - 1
-		self.freelinks:push(i)
+		self.free_indices:push(i)
 		return i
 	end
 
-	terra list:_link_after(pe: &link, i: size_t, e: &link)
-		var p = iif(pe ~= nil, self.links:index(pe), self._last)
-		if p == self._last then
-			if self._last ~= -1 then
-				self.links:at(self._last)._next = i
-				e._prev = self._last
-				e._next = -1
-				self._last = i
-			else
-				self._first = i
-				self._last = i
-				e._next = -1
-				e._prev = -1
-			end
-		else
-			var n = pe._next
-			if n ~= -1 then
-				self.links:at(n)._prev = i
-			end
-			pe._next = i
-			e._prev = p
-			e._next = n
-		end
+	terra list:_link_between(
+		p: size_t, pe: &link,
+		n: size_t, ne: &link,
+		i: size_t, ce: &link
+	)
+		if pe ~= nil then pe.next_index = i else self.first_index = i end
+		ce.prev_index = p
+		ce.next_index = n
+		if ne ~= nil then ne.prev_index = i else self.last_index = i end
 	end
 
-	terra list:_link_before(ne: &link, i: size_t, e: &link)
-		var n = iif(ne ~= nil, self.links:index(ne), self._first)
-		if n == self._first then
-			if self._first ~= -1 then
-				self.links:at(self._first)._prev = i
-				e._next = self._first
-				e._prev = -1
-				self._first = i
-			else
-				self._first = i
-				self._last = i
-				e._next = -1
-				e._prev = -1
-			end
-		else
-			var p = self.links:index(ne._prev)
-			var pe = self.links:at(p)
-			self:_link_after(pe, i, e)
-		end
+	terra list:_link_after(p: size_t, pe: &link, i: size_t, ce: &link)
+		var n  = iif(p ~= -1, pe.next_index, -1)
+		var ne = iif(n ~= -1, self.links:at(n), nil)
+		self:_link_between(p, pe, n, ne, i, ce)
 	end
 
-	terra list:_unlink(e: &link)
-		if e == nil then return -1 end --so list:remove(list.first) always works
-		var i = self.links:index(e)
-		if e._next == -1 and e._prev == -1 and i ~= self._first then
-			return -1 --already removed
-		end
-		var p = e._prev
-		var n = e._next
-		if p ~= -1 then self.links:at(p)._next = n else self._first = n end
-		if n ~= -1 then self.links:at(n)._prev = p else self._last  = p end
-		e._next = -1
-		e._prev = -1
-		return i
+	terra list:_link_before(n: size_t, ne: &link, i: size_t, ce: &link)
+		var p  = iif(n ~= -1, ne.prev_index, -1)
+		var pe = iif(p ~= -1, self.links:at(p), nil)
+		self:_link_between(p, pe, n, ne, i, ce)
+	end
+
+	terra list:_unlink(i: size_t, e: &link)
+		var p = e.prev_index
+		var n = e.next_index
+		if p ~= -1 then self.links:at(p).next_index = n else self.first_index = n end
+		if n ~= -1 then self.links:at(n).prev_index = p else self.last_index  = p end
+		e.next_index = -1
+		e.prev_index = -1
 	end
 
 	list.methods.insert_after = overload'insert_after'
-	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T)
+	list.methods.insert_after:adddefinition(terra(self: &list, p: size_t)
+		if p == -1 then
+			--allow self:insert_after(self.last_index) even when empty
+			assert(self.last_index == -1)
+		end
+		var pe = iif(p ~= -1, assert_valid(self, p, self.links:at(p)), nil)
 		var i = self:_newlink()
 		var e = self.links:at(i)
-		self:_link_after([&link](pe), i, e)
+		self:_link_after(p, pe, i, e)
 		return &e.item
 	end)
-	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T, v: &T)
-		var e = self:insert_after(pe); @e = @v; return e
+	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T)
+		return self:insert_after(iif(pe ~= nil, self.links:index([&link](pe)), -1))
+	end)
+	list.methods.insert_after:adddefinition(terra(self: &list, p: size_t, v: T)
+		var e = self:insert_after(p); @e = v; return e
+	end)
+	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T, v: T)
+		var e = self:insert_after(pe); @e = v; return e
 	end)
 
 	list.methods.insert_before = overload'insert_before'
-	list.methods.insert_before:adddefinition(terra(self: &list, ne: &T)
+	list.methods.insert_before:adddefinition(terra(self: &list, n: size_t)
+		if n == -1 then
+			--allow self:insert_before(self.first_index) even when empty
+			assert(self.first_index == -1)
+		end
+		var ne = iif(n ~= -1, assert_valid(self, n, self.links:at(n)), nil)
 		var i = self:_newlink()
 		var e = self.links:at(i)
-		self:_link_before([&link](ne), i, e)
+		self:_link_before(n, ne, i, e)
 		return &e.item
 	end)
-	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T, v: &T)
-		var e = self:insert_before(pe); @e = @v; return e
+	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T)
+		return self:insert_before(iif(pe ~= nil, self.links:index([&link](pe)), -1))
+	end)
+	list.methods.insert_before:adddefinition(terra(self: &list, p: size_t, v: T)
+		var e = self:insert_before(p); @e = v; return e
+	end)
+	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T, v: T)
+		var e = self:insert_before(pe); @e = v; return e
 	end)
 
 	list.methods.insert_first = overload('insert_first', {
-		terra(self: &list) return self:insert_before(nil) end,
-		terra(self: &list, v: &T) return self:insert_before(nil, v) end,
+		terra(self: &list) return self:insert_before(self.first_index) end,
+		terra(self: &list, v: T) return self:insert_before(self.first_index, v) end,
 	})
 	list.methods.insert_last = overload('insert_last', {
-		terra(self: &list) return self:insert_after(nil) end,
-		terra(self: &list, v: &T) return self:insert_after(nil, v) end,
+		terra(self: &list) return self:insert_after(self.last_index) end,
+		terra(self: &list, v: T) return self:insert_after(self.last_index, v) end,
 	})
 
-	terra list:remove(e: &T)
-		var i = self:_unlink([&link](e))
-		if i ~= -1 then
-			self:_freelink(i)
-		end
+	list.methods.remove = overload'remove'
+	list.methods.remove:adddefinition(terra(self: &list, i: size_t)
+		var e = assert_valid(self, i, self.links:at(i))
+		self:_unlink(i, e)
+		self:_freelink(i)
+	end)
+	list.methods.remove:adddefinition(terra(self: &list, e: &T)
+		self:remove(self.links:index([&link](e)))
+	end)
+
+	terra list:set_first_index(i: size_t)
+		var e = assert_valid(self, i, self.links:at(i))
+		var p = self.first_index
+		if i == p then return end
+		var pe = self.links:at(p)
+		self:_link_before(p, pe, i, e)
+		self:_unlink(p, pe)
 	end
 
-	terra list:make_first(e: &T)
-		var e = [&link](e)
-		var i = self:_unlink(e)
-		if i ~= -1 then
-			self:_link_before(nil, i, e)
-		end
+	terra list:set_last_index(i: size_t)
+		var e = assert_valid(self, i, self.links:at(i))
+		var n = self.last_index
+		if i == n then return end
+		var ne = self.links:at(n)
+		self:_link_after(n, ne, i, e)
+		self:_unlink(n, ne)
+	end
+
+	terra list:set_first(e: &T)
+		self:set_first_index(self.links:index([&link](e)))
+	end
+	terra list:set_last(e: &T)
+		self:set_last_index(self.links:index([&link](e)))
 	end
 
 	setinlined(list.methods)
