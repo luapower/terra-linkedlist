@@ -25,10 +25,10 @@
 	for &e in list do ... end                   iterate elements
 	for &e in list:backwards() do ... end       iterate backwards
 
-	list:insert_first(&v)                       insert at the front
-	list:insert_last(&v)                        insert at the back
-	list:insert_after(&e, &v)                   insert v after e
-	list:insert_before(&e, &v)                  insert v before e
+	list:insert_before([&e][, &v]) -> &v        insert v before e|first
+	list:insert_after([&e][, &v]) -> &v         insert v after e|last
+	list:insert_first([&v]) -> &v               insert at the front
+	list:insert_last([&v]) -> &v                insert at the back
 	list:remove(&e)                             remove element
 	list:make_first(&e)                         move element to front
 
@@ -101,7 +101,7 @@ local function list_type(T, size_t)
 		return quote
 			var i = self.list._last
 			while i ~= -1 do
-				var link = self.links:at(i)
+				var link = self.list.links:at(i)
 				[ body(`[&T](link)) ]
 				i = link._prev
 			end
@@ -220,8 +220,8 @@ local function list_type(T, size_t)
 		self:_link_after([&link](pe), i, e)
 		return &e.item
 	end)
-	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T, v: T)
-		var e = self:insert_after(pe); @e = v; return e
+	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T, v: &T)
+		var e = self:insert_after(pe); @e = @v; return e
 	end)
 
 	list.methods.insert_before = overload'insert_before'
@@ -231,17 +231,17 @@ local function list_type(T, size_t)
 		self:_link_before([&link](ne), i, e)
 		return &e.item
 	end)
-	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T, v: T)
-		var e = self:insert_before(pe); @e = v; return e
+	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T, v: &T)
+		var e = self:insert_before(pe); @e = @v; return e
 	end)
 
 	list.methods.insert_first = overload('insert_first', {
 		terra(self: &list) return self:insert_before(nil) end,
-		terra(self: &list, v: T) return self:insert_before(nil, v) end,
+		terra(self: &list, v: &T) return self:insert_before(nil, v) end,
 	})
 	list.methods.insert_last = overload('insert_last', {
 		terra(self: &list) return self:insert_after(nil) end,
-		terra(self: &list, v: T) return self:insert_after(nil, v) end,
+		terra(self: &list, v: &T) return self:insert_after(nil, v) end,
 	})
 
 	terra list:remove(e: &T)
