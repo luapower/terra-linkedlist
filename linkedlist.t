@@ -4,8 +4,8 @@
 	Written by Cosmin Apreutesei. Public domain.
 
 	Implemented using a dynarray and a freelist, which means that the location
-	of the elements in memory is not stable unless the list is preallocated
-	and doesn't grow.
+	of the elements in memory is not stable between inserts unless the list is
+	preallocated and doesn't grow.
 
 	local list_type = list(T, [size_t=int])     create a list type
 	var list = list_type(nil)                   create a list object
@@ -22,8 +22,8 @@
 	list:next(&e) -> &e                         next element
 	list:prev(&e) -> &e                         prev element
 
-	for &e in list do ... end                   iterate elements
-	for &e in list:backwards() do ... end       iterate backwards
+	for &e in list do ... end                   iterate elements (remove() works inside)
+	for &e in list:backwards() do ... end       iterate backwards (remove() works inside)
 
 	list:insert_before([&e][, &v]) -> &v        insert v before e|first
 	list:insert_after([&e][, &v]) -> &v         insert v after e|last
@@ -72,26 +72,27 @@ local function list_type(T, size_t)
 		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 	end
 
-	list.methods.get_first = macro(function(self)
-		return `iif(self._first ~= -1, &self.links:at(self._first).item, nil)
-	end)
-	list.methods.get_last  = macro(function(self)
-		return `iif(self._last ~= -1, &self.links:at(self._last).item, nil)
-	end)
-	list.methods.next = macro(function(self, e)
-		return `[&T](self.links:at([&link](e)._next, nil))
-	end)
-	list.methods.prev = macro(function(self, e)
-		return `[&T](self.links:at([&link](e)._prev, nil))
-	end)
+	terra list:get_first()
+		return iif(self._first ~= -1, &self.links:at(self._first).item, nil)
+	end
+	terra list:get_last()
+		return iif(self._last ~= -1, &self.links:at(self._last).item, nil)
+	end
+	terra list:next(e: &T)
+		return iif(e ~= nil, [&T](self.links:at([&link](e)._next, nil)), nil)
+	end
+	terra list:prev(e: &T)
+		return iif(e ~= nil, [&T](self.links:at([&link](e)._prev, nil)), nil)
+	end
 
 	list.metamethods.__for = function(self, body)
 		return quote
 			var i = self._first
 			while i ~= -1 do
-				var link = self.links:at(i)
-				[ body(`[&T](link)) ]
-				i = link._next
+				var e = self.links:at(i)
+				var n = e._next
+				[ body(`[&T](e)) ]
+				i = n
 			end
 		end
 	end
@@ -101,9 +102,10 @@ local function list_type(T, size_t)
 		return quote
 			var i = self.list._last
 			while i ~= -1 do
-				var link = self.list.links:at(i)
-				[ body(`[&T](link)) ]
-				i = link._prev
+				var e = self.list.links:at(i)
+				var p = e._prev
+				[ body(`[&T](e)) ]
+				i = p
 			end
 		end
 	end
@@ -202,8 +204,10 @@ local function list_type(T, size_t)
 
 	terra list:_unlink(e: &link)
 		if e == nil then return -1 end --so list:remove(list.first) always works
-		if e._next == -1 and e._prev == -1 then return -1 end --already removed
 		var i = self.links:index(e)
+		if e._next == -1 and e._prev == -1 and i ~= self._first then
+			return -1 --already removed
+		end
 		var p = e._prev
 		var n = e._next
 		if p ~= -1 then self.links:at(p)._next = n else self._first = n end
