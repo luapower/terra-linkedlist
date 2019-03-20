@@ -1,37 +1,36 @@
+--[[
 
---Doubly-linked list for Terra.
---Written by Cosmin Apreutesei. Public domain.
+	Self-allocated doubly-linked list for Terra.
+	Written by Cosmin Apreutesei. Public domain.
 
---Implemented using a dynarray and a freelist, which means that the location
---of the elements in memory is not stable but their indices are.
+	Implemented using a dynarray and a freelist, which means that the location
+	of the elements in memory is not stable unless the list is preallocated
+	and doesn't grow.
 
---[[  API
+	local list_type = list(T, [size_t=int])     create a list type
+	var list = list_type(nil)                   create a list object
+	var list = list(T, [size_t])                create a list object
 
-	local D = linkedlist{item_t=, size_t=int, C=require'low'}
-	var d: D = nil -- =nil is imortant!
-	d:free()
-	d:clear()
-	d.min_capacity
-	d.count
+	list:init()                                 initialize (for struct members)
+	list:clear()                                remove items, keep the memory
+	list:free()                                 free (items are not freed!)
+	list.min_capacity                           (write/only) grow capacity
 
-	d:at(i) -> &v|nil
-	d[:get](i[,default]) -> v
-	d:set(i,v) -> i|-1
-	for i,&v in d do ... end
+	list.first -> &e                            first element
+	list.last  -> &e                            last element
 
-	d:insert_first([v]) -> i|-1
-	d:insert_last([v]) -> i|-1
-	d:insert_before(i[,v]) -> i|-1
-	d:insert_after(i[,v]) -> i|-1
-	d:remove(i) -> i|-1
-	d:remove_last() -> i|-1
-	d:remove_first() -> i|-1
-	d:make_first(i) -> i|-1
+	list:next(&e) -> &e                         next element
+	list:prev(&e) -> &e                         prev element
 
-	d.first_index -> i|-1
-	d.last_index -> i|-1
-	d:next_index(i) -> i|-1
-	d:prev_index(i) -> i|-1
+	for &e in list do ... end                   iterate elements
+	for &e in list:backwards() do ... end       iterate backwards
+
+	list:insert_first(&v)                       insert at the front
+	list:insert_last(&v)                        insert at the back
+	list:insert_after(&e, &v)                   insert v after e
+	list:insert_before(&e, &v)                  insert v before e
+	list:remove(&e)                             remove element
+	list:make_first(&e)                         move element to front
 
 ]]
 
@@ -39,13 +38,13 @@ if not ... then require'linkedlist_test'; return end
 
 setfenv(1, require'low')
 
-local function list_type(T, size_t, C)
+local function list_type(T, size_t)
 
 	local struct link {
-		next: size_t;
-		prev: size_t;
-		item: T; --TODO: make item optional
-	};
+		item: T; --must be the first field!
+		_next: size_t;
+		_prev: size_t;
+	}
 
 	local links = arr{T = link, size_t = size_t}
 	local freelinks = arr{T = size_t, size_t = size_t}
@@ -53,20 +52,62 @@ local function list_type(T, size_t, C)
 	local struct list (gettersandsetters) {
 		links: links;
 		freelinks: freelinks;
-		first_index: size_t;
-		last_index: size_t;
+		_first: size_t;
+		_last: size_t;
 		count: size_t;
 	}
 
-	list.empty = `list{
+	list.empty = `list {
 		links = links(nil);
 		freelinks = freelinks(nil);
-		first_index = -1;
-		last_index = -1;
+		_first = -1;
+		_last = -1;
 		count = 0;
 	}
 
-	--memory management
+	function list.metamethods.__cast(from, to, exp)
+		if to == list and from == niltype then
+			return list.empty
+		end
+		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
+	end
+
+	list.methods.get_first = macro(function(self)
+		return `iif(self._first ~= -1, &self.links:at(self._first).item, nil)
+	end)
+	list.methods.get_last  = macro(function(self)
+		return `iif(self._last ~= -1, &self.links:at(self._last).item, nil)
+	end)
+	list.methods.next = macro(function(self, e)
+		return `[&T](self.links:at([&link](e)._next, nil))
+	end)
+	list.methods.prev = macro(function(self, e)
+		return `[&T](self.links:at([&link](e)._prev, nil))
+	end)
+
+	list.metamethods.__for = function(self, body)
+		return quote
+			var i = self._first
+			while i ~= -1 do
+				var link = self.links:at(i)
+				[ body(`[&T](link)) ]
+				i = link._next
+			end
+		end
+	end
+
+	local struct backwards {list: &list}
+	backwards.metamethods.__for = function(self, body)
+		return quote
+			var i = self.list._last
+			while i ~= -1 do
+				var link = self.links:at(i)
+				[ body(`[&T](link)) ]
+				i = link._prev
+			end
+		end
+	end
+	terra list:backwards() return backwards{list = self} end
 
 	terra list:init()
 		@self = [list.empty]
@@ -75,22 +116,15 @@ local function list_type(T, size_t, C)
 	terra list:clear()
 		self.links.len = 0
 		self.freelinks.len = 0
-		self.first_index = -1
-		self.last_index = -1
+		self._first = -1
+		self._last = -1
 		self.count = 0
 	end
 
-	terra list:free() --can be reused after free
+	terra list:free()
 		self:clear()
 		self.links:free()
 		self.freelinks:free()
-	end
-
-	function list.metamethods.__cast(from, to, exp)
-		if from == niltype then
-			return list.empty
-		end
-		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
 	end
 
 	terra list:set_min_capacity(size: size_t)
@@ -98,54 +132,14 @@ local function list_type(T, size_t, C)
 		self.freelinks.min_capacity = size
 	end
 
-	terra list:__memsize(): size_t
-		return sizeof(list) + self.links:__memsize() + self.freelinks:__memsize()
+	terra list:__memsize()
+		return sizeof(list)
+			- sizeof(links) + memsize(self.links)
+			- sizeof(freelinks) + memsize(self.freelinks)
 	end
 
-	--value access
-
-	list.methods.at = overload'at'
-	list.methods.at:adddefinition(terra(self: &list, i: size_t)
-		return &self.links:at(i).item
-	end)
-	list.methods.at:adddefinition(terra(self: &list, i: size_t, default: &T)
-		var link = self.links:at(i, nil)
-		return iif(link ~= nil, &link.item, default)
-	end)
-	list.methods.get = overload'get'
-	list.methods.get:adddefinition(terra(self: &list, i: size_t)
-		return @self:at(i)
-	end)
-	list.methods.get:adddefinition(terra(self: &list, i: size_t, default: T)
-		return @self:at(i, &default)
-	end)
-	list.metamethods.__apply = list.methods.get
-
-	terra list:set(i: size_t, v: T)
-		var p = self:at(i)
-		if p == nil then return -1 end
-		@p = v
-		return i
-	end
-
-	--navigation & traversal
-
-	list.methods.next_index = macro(function(self, i) return `self.links(i).next end)
-	list.methods.prev_index = macro(function(self, i) return `self.links(i).prev end)
-
-	list.metamethods.__for = function(self, body)
-		return quote
-			var i = self.first_index
-			while i ~= -1 do
-				[ body(`self:at(i)) ]
-				i = self:next_index(i)
-			end
-		end
-	end
-
-	--mutation
-
-	local terra grab_link(self: &list): size_t
+	terra list:_newlink()
+		self.count = self.count + 1
 		if self.freelinks.len > 0 then
 			return self.freelinks:pop()
 		else
@@ -154,139 +148,132 @@ local function list_type(T, size_t, C)
 		end
 	end
 
-	local terra link_first(self: &list, link: &link, link_index: size_t)
-		if self.first_index == -1 then
-			self.first_index = link_index
-			self.last_index = link_index
-			link.next = -1
-			link.prev = -1
-		else
-			link.next = self.first_index
-			link.prev = -1
-			self.links:at(self.first_index).prev = link_index
-			self.first_index = link_index
-		end
-	end
-
-	list.methods.insert_first = overload('insert_first', {})
-	list.methods.insert_first:adddefinition(terra(self: &list): size_t
-		var link_index = grab_link(self)
-		if link_index == -1 then return -1 end
-		var link = self.links:at(link_index)
-		link_first(self, link, link_index)
-		self.count = self.count + 1
-		return link_index
-	end)
-	list.methods.insert_first:adddefinition(terra(self: &list, v: T): size_t
-		var i = self:insert_first()
-		if i ~= -1 then @self:at(i) = v end
-		return i
-	end)
-
-	list.methods.insert_after = overload('insert_after', {})
-	list.methods.insert_after:adddefinition(terra(self: &list, anchor_index: size_t): size_t
-		var link_index = grab_link(self)
-		if link_index == -1 then return -1 end
-		var anchor = self.links:at(anchor_index)
-		var link   = self.links:at(link_index)
-		if anchor.next ~= -1 then
-			self.links:at(anchor.next).prev = link_index
-		else
-			self.last_index = link_index
-		end
-		link.next = anchor.next
-		link.prev = anchor_index
-		anchor.next = link_index
-		self.count = self.count + 1
-		return link_index
-	end)
-	list.methods.insert_after:adddefinition(terra(self: &list, anchor_index: size_t, v: T): size_t
-		var i = self:insert_after(anchor_index)
-		if i ~= -1 then @self:at(i) = v end
-		return i
-	end)
-
-	list.methods.insert_last = overload('insert_last', {})
-	list.methods.insert_last:adddefinition(terra(self: &list)
-		if self.last_index ~= -1 then
-			return self:insert_after(self.last_index)
-		else
-			return self:insert_first()
-		end
-	end)
-	list.methods.insert_last:adddefinition(terra(self: &list, v: T)
-		if self.last_index ~= -1 then
-			return self:insert_after(self.last_index, v)
-		else
-			return self:insert_first(v)
-		end
-	end)
-
-	list.methods.insert_before = overload('insert_before', {})
-	list.methods.insert_before:adddefinition(terra(self: &list, anchor_index: size_t, v: T)
-		anchor_index = self.links(anchor_index).prev
-		if anchor_index ~= -1 then
-			return self:insert_after(anchor_index, v)
-		else
-			return self:insert_first(v)
-		end
-	end)
-
-	local terra unlink(self: &list, link: &link, link_index: size_t)
-		if link.next ~= -1 then
-			if link.prev ~= -1 then --in the middle
-				self.links:at(link.next).prev = link.prev
-				self.links:at(link.prev).next = link.next
-			else --the first
-				assert(link_index == self.first_index)
-				self.links:at(link.next).prev = -1
-				self.first_index = link.next
-			end
-		elseif link.prev ~= -1 then --the last
-			assert(link_index == self.last_index)
-			self.links:at(link.prev).next = -1
-			self.last_index = link.prev
-		else --the only
-			assert(link_index == self.first_index and link_index == self.last_index)
-			self.first_index = -1
-			self.last_index = -1
-		end
-	end
-
-	terra list:remove(link_index: size_t)
-		if link_index == -1 then return -1 end
-		var link = self.links:at(link_index)
-		unlink(self, link, link_index)
-		self.freelinks:push(link_index)
+	terra	list:_freelink(i: size_t)
 		self.count = self.count - 1
-		return link_index
+		self.freelinks:push(i)
+		return i
 	end
 
-	terra list:remove_last()
-		return self:remove(self.last_index)
+	terra list:_link_after(pe: &link, i: size_t, e: &link)
+		var p = iif(pe ~= nil, self.links:index(pe), self._last)
+		if p == self._last then
+			if self._last ~= -1 then
+				self.links:at(self._last)._next = i
+				e._prev = self._last
+				e._next = -1
+				self._last = i
+			else
+				self._first = i
+				self._last = i
+				e._next = -1
+				e._prev = -1
+			end
+		else
+			var n = pe._next
+			if n ~= -1 then
+				self.links:at(n)._prev = i
+			end
+			pe._next = i
+			e._prev = p
+			e._next = n
+		end
 	end
 
-	terra list:remove_first()
-		return self:remove(self.first_index)
+	terra list:_link_before(ne: &link, i: size_t, e: &link)
+		var n = iif(ne ~= nil, self.links:index(ne), self._first)
+		if n == self._first then
+			if self._first ~= -1 then
+				self.links:at(self._first)._prev = i
+				e._next = self._first
+				e._prev = -1
+				self._first = i
+			else
+				self._first = i
+				self._last = i
+				e._next = -1
+				e._prev = -1
+			end
+		else
+			var p = self.links:index(ne._prev)
+			var pe = self.links:at(p)
+			self:_link_after(pe, i, e)
+		end
 	end
 
-	terra list:make_first(link_index: size_t)
-		if link_index == self.first_index then return end
-		var link = self.links:at(link_index)
-		unlink(self, link, link_index)
-		link_first(self, link, link_index)
+	terra list:_unlink(e: &link)
+		if e == nil then return -1 end --so list:remove(list.first) always works
+		if e._next == -1 and e._prev == -1 then return -1 end --already removed
+		var i = self.links:index(e)
+		var p = e._prev
+		var n = e._next
+		if p ~= -1 then self.links:at(p)._next = n else self._first = n end
+		if n ~= -1 then self.links:at(n)._prev = p else self._last  = p end
+		e._next = -1
+		e._prev = -1
+		return i
 	end
+
+	list.methods.insert_after = overload'insert_after'
+	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T)
+		var i = self:_newlink()
+		var e = self.links:at(i)
+		self:_link_after([&link](pe), i, e)
+		return &e.item
+	end)
+	list.methods.insert_after:adddefinition(terra(self: &list, pe: &T, v: T)
+		var e = self:insert_after(pe); @e = v; return e
+	end)
+
+	list.methods.insert_before = overload'insert_before'
+	list.methods.insert_before:adddefinition(terra(self: &list, ne: &T)
+		var i = self:_newlink()
+		var e = self.links:at(i)
+		self:_link_before([&link](ne), i, e)
+		return &e.item
+	end)
+	list.methods.insert_before:adddefinition(terra(self: &list, pe: &T, v: T)
+		var e = self:insert_before(pe); @e = v; return e
+	end)
+
+	list.methods.insert_first = overload('insert_first', {
+		terra(self: &list) return self:insert_before(nil) end,
+		terra(self: &list, v: T) return self:insert_before(nil, v) end,
+	})
+	list.methods.insert_last = overload('insert_last', {
+		terra(self: &list) return self:insert_after(nil) end,
+		terra(self: &list, v: T) return self:insert_after(nil, v) end,
+	})
+
+	terra list:remove(e: &T)
+		var i = self:_unlink([&link](e))
+		if i ~= -1 then
+			self:_freelink(i)
+		end
+	end
+
+	terra list:make_first(e: &T)
+		var e = [&link](e)
+		var i = self:_unlink(e)
+		if i ~= -1 then
+			self:_link_before(nil, i, e)
+		end
+	end
+
+	setinlined(list.methods)
 
 	return list
 end
 list_type = terralib.memoize(list_type)
 
 local list_type = function(T, size_t)
-	if terralib.type(T) == 'table' then
+	if type(T) == 'table' then
 		T, size_t = T.T, T.size_t
 	end
 	assert(T)
 	return list_type(T, size_t or int)
 end
 
-return list_type
+return macro(function(T, size_t)
+	local list = list_type(T, size_t)
+	return `list(nil)
+end, list_type)
