@@ -32,14 +32,10 @@
 
 	list:insert_before(i[,v]) -> i              insert v before i
 	list:insert_after(i[,v]) -> i               insert v after i
-	list:insert_first([v]) -> i                 insert at the front
-	list:insert_last([v]) -> i                  insert at the back
 	list:remove(i)                              remove link
 
 	list:move_before(di,i)                      move link at i before link at di
 	list:move_after(di,i)                       move link at i after link at di
-	list:move_first(i)                          move link to the front
-	list:move_last(i)                           move link to the back
 
 ]]
 
@@ -55,23 +51,27 @@ local function list_type(T, size_t)
 		prev: size_t;
 	}
 
-	local links = arr{T = link, size_t = size_t}
-	local free_indices = arr{T = size_t, size_t = size_t}
+	local links_arr   = arr{T = link, size_t = size_t}
+	local indices_arr = arr{T = size_t, size_t = size_t}
 
 	local struct list (gettersandsetters) {
-		links: links;
-		free_indices: free_indices;
-		first: size_t;
-		last: size_t;
-		count: size_t;
+		links        : links_arr;
+		free_indices : indices_arr;
+		first        : size_t;
+		last         : size_t;
+		count        : size_t;
 	}
 
+	list.T = T
+	list.size_t = size_t
+	list.link = link
+
 	list.empty = `list {
-		links = links(nil);
-		free_indices = free_indices(nil);
-		first = -1;
-		last = -1;
-		count = 0;
+		links        = links_arr(nil);
+		free_indices = indices_arr(nil);
+		first        = -1;
+		last         = -1;
+		count        =  0;
 	}
 
 	function list.metamethods.__cast(from, to, exp)
@@ -158,14 +158,15 @@ local function list_type(T, size_t)
 	end
 
 	terra list:__memsize()
-		return sizeof(list)
-			- sizeof(links) + memsize(self.links)
-			- sizeof(free_indices) + memsize(self.free_indices)
+		return sizeof(@self)
+			- sizeof(self.links) + memsize(self.links)
+			- sizeof(self.free_indices) + memsize(self.free_indices)
 	end
 
 	terra list:_newlink()
 		self.count = self.count + 1
 		if self.free_indices.len > 0 then
+			var i = self.free_indices(self.free_indices.len-1)
 			return self.free_indices:pop()
 		else
 			self.links:add()
@@ -213,9 +214,10 @@ local function list_type(T, size_t)
 
 	list.methods.insert_after = overload'insert_after'
 	list.methods.insert_after:adddefinition(terra(self: &list, p: size_t)
-		var pe = self:anchorlink(p)
 		var i = self:_newlink()
+		--NOTE: must get these pointers _after_ the link was created.
 		var e = self.links:at(i)
+		var pe = self:anchorlink(p)
 		self:_link_after(p, pe, i, e)
 		return i, e
 	end)
@@ -227,9 +229,10 @@ local function list_type(T, size_t)
 
 	list.methods.insert_before = overload'insert_before'
 	list.methods.insert_before:adddefinition(terra(self: &list, n: size_t)
-		var ne = self:anchorlink(n)
-		var i = self:_newlink()
+		var i = self:_newlink() --this can grow and thus invalidate the list!
+		--NOTE: must get these pointers _after_ the link was created.
 		var e = self.links:at(i)
+		var ne = self:anchorlink(n)
 		self:_link_before(n, ne, i, e)
 		return i, e
 	end)
@@ -239,15 +242,6 @@ local function list_type(T, size_t)
 		return i, e
 	end)
 
-	list.methods.insert_first = overload('insert_first', {
-		terra(self: &list) return self:insert_before(self.first) end,
-		terra(self: &list, v: T) return self:insert_before(self.first, v) end,
-	})
-	list.methods.insert_last = overload('insert_last', {
-		terra(self: &list) return self:insert_after(self.last) end,
-		terra(self: &list, v: T) return self:insert_after(self.last, v) end,
-	})
-
 	terra list:remove(i: size_t)
 		var e = self:link(i)
 		self:_unlink(i, e)
@@ -256,22 +250,19 @@ local function list_type(T, size_t)
 
 	terra list:move_before(n: size_t, i: size_t)
 		if i == n then return end
-		var ne = self:anchorlink(n)
 		var e = self:link(i)
+		var ne = self:anchorlink(n)
 		self:_unlink(i, e)
 		self:_link_before(n, ne, i, e)
 	end
 
 	terra list:move_after(p: size_t, i: size_t)
 		if i == p then return end
-		var pe = self:anchorlink(p)
 		var e = self:link(i)
+		var pe = self:anchorlink(p)
 		self:_unlink(i, e)
 		self:_link_after(p, pe, i, e)
 	end
-
-	terra list:move_first(i: size_t) self:move_before(self.first, i) end
-	terra list:move_last(i: size_t) self:move_after(self.last, i) end
 
 	setinlined(list.methods)
 
