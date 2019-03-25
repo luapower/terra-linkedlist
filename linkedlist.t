@@ -46,7 +46,7 @@ setfenv(1, require'low')
 local function list_type(T, size_t)
 
 	local struct link {
-		item: T; --must be the first field!
+		item: T;
 		next: size_t;
 		prev: size_t;
 	}
@@ -278,7 +278,7 @@ local list_type = function(T, size_t)
 	return list_type(T, size_t or int)
 end
 
-return macro(function(T, size_t)
+low.arraylinkedlist = macro(function(T, size_t)
 	local list = list_type(T, size_t)
 	return `list(nil)
 end, list_type)

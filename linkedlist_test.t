@@ -1,6 +1,6 @@
 
 setfenv(1, require'low')
-local list = require'linkedlist'
+require'linkedlist'
 
 local struct S {x: int}
 terra test()
@@ -9,7 +9,7 @@ terra test()
 	a:add(S{2})
 	a:add(S{3})
 
-	var s = [list(S)](nil)
+	var s = [arraylinkedlist(S)](nil)
 
 	for i,e in a:backwards() do s:insert_before(s.first, @e) end
 	do var i = 1
@@ -59,12 +59,13 @@ terra test()
 	var i1, e1 = s:insert_before(i2, a(1))
 	do var i = 1; for _,e in s do assert(e.item.x == i); inc(i) end end
 
-	s:remove(s.last)
-	s:move_before(s.first, 2)
-	for i,e in s do
-		--print(i, @e)
-	end
-
+	s:remove(i1)
+	s:move_before(s.first, i2)
+	assert(s.first == i2)
+	assert(s.last == i0)
+	s:move_after(s.last, i2)
+	assert(s.first == i0)
+	assert(s.last == i2)
 
 end
 test()
