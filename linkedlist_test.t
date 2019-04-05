@@ -9,7 +9,7 @@ terra test()
 	a:add(S{2})
 	a:add(S{3})
 
-	var s = [arraylinkedlist(S)](nil)
+	var s = arraylinkedlist(S)
 
 	for i,e in a:backwards() do s:insert_before(s.first, @e) end
 	do var i = 1

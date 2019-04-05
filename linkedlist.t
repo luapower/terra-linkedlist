@@ -60,6 +60,7 @@ local function list_type(T, size_t)
 		first        : size_t;
 		last         : size_t;
 		count        : size_t;
+		noown        : bool;
 	}
 
 	list.T = T
@@ -67,19 +68,15 @@ local function list_type(T, size_t)
 	list.link = link
 
 	list.empty = `list {
-		links        = links_arr(nil);
+		links        = [links_arr.empty_noown];
 		free_indices = indices_arr(nil);
 		first        = -1;
 		last         = -1;
 		count        =  0;
+		noown        = false;
 	}
 
-	function list.metamethods.__cast(from, to, exp)
-		if to == list and from == niltype then
-			return list.empty
-		end
-		assert(false, 'invalid cast from ', from, ' to ', to, ': ', exp)
-	end
+	newcast(list, niltype, list.empty)
 
 	terra list:link(i: size_t)
 		var e = self.links:at(i)
@@ -129,6 +126,9 @@ local function list_type(T, size_t)
 	end
 
 	terra list:clear()
+		if not self.noown then
+			self.links:call'free'
+		end
 		self.links.len = 0
 		self.free_indices.len = 0
 		self.first = -1
@@ -158,9 +158,7 @@ local function list_type(T, size_t)
 	end
 
 	terra list:__memsize()
-		return sizeof(@self)
-			- sizeof(self.links) + memsize(self.links)
-			- sizeof(self.free_indices) + memsize(self.free_indices)
+		return memsize(self.links) + memsize(self.free_indices)
 	end
 
 	terra list:_newlink()
@@ -175,6 +173,9 @@ local function list_type(T, size_t)
 	end
 
 	terra	list:_freelink(i: size_t)
+		if not self.noown then
+			call(self.links:at(i), 'free')
+		end
 		self.count = self.count - 1
 		self.free_indices:push(i)
 		return i
@@ -251,7 +252,7 @@ local function list_type(T, size_t)
 	terra list:move_before(n: size_t, i: size_t)
 		if i == n then return end
 		var e = self:link(i)
-		var ne = self:anchorlink(n)
+		var ne = self:link(n)
 		self:_unlink(i, e)
 		self:_link_before(n, ne, i, e)
 	end
@@ -259,7 +260,7 @@ local function list_type(T, size_t)
 	terra list:move_after(p: size_t, i: size_t)
 		if i == p then return end
 		var e = self:link(i)
-		var pe = self:anchorlink(p)
+		var pe = self:link(p)
 		self:_unlink(i, e)
 		self:_link_after(p, pe, i, e)
 	end
@@ -279,6 +280,6 @@ local list_type = function(T, size_t)
 end
 
 low.arraylinkedlist = macro(function(T, size_t)
-	local list = list_type(T, size_t)
+	local list = list_type(T:astype(), size_t)
 	return `list(nil)
 end, list_type)
