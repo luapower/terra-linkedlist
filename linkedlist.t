@@ -80,11 +80,26 @@ local list_type = memoize(function(T, size_t, context_t, own_elements)
 
 	addmethods(list, function()
 
+		if context_t then
+			terra list:init(context: context_t)
+				@self = [list.empty]
+				self.links.context = context
+			end
+		else
+			terra list:init()
+				@self = [list.empty]
+			end
+		end
+
 		if cancall(T, 'free') then
 			if context_t then
-				terra link:free(context: context_t) self.item:free(context) end
+				terra link:free(context: context_t)
+					self.item:free(context)
+				end
 			else
-				terra link:free() self.item:free() end
+				terra link:free()
+					self.item:free()
+				end
 			end
 		end
 
@@ -130,10 +145,6 @@ local list_type = memoize(function(T, size_t, context_t, own_elements)
 			end
 		end
 		terra list:backwards() return backwards{list = self} end
-
-		terra list:init()
-			@self = [list.empty]
-		end
 
 		terra list:clear()
 			if own_elements then
@@ -289,7 +300,7 @@ local list_type = function(T, size_t)
 			T.T, T.size_t, T.context_t, T.own_elements
 	end
 	assert(T)
-	return list_type(T, size_t or int, context_t, own_elements ~= false)
+	return list_type(T, size_t or int, context_t or nil, own_elements ~= false)
 end
 
 low.arraylinkedlist = macro(function(T, size_t)
