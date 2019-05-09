@@ -52,7 +52,7 @@ local list_type = memoize(function(T, size_t, context_t, own_elements)
 
 	local links_arr   = arr{T = link, size_t = size_t,
 									context_t = context_t,
-									own_elements = own_elements,
+									own_elements = false,
 									}
 	local indices_arr = arr{T = size_t, size_t = size_t}
 
@@ -185,7 +185,6 @@ local list_type = memoize(function(T, size_t, context_t, own_elements)
 		terra list:_newlink()
 			self.count = self.count + 1
 			if self.free_indices.len > 0 then
-				var i = self.free_indices(self.free_indices.len-1)
 				return self.free_indices:pop()
 			else
 				self.links:add()
