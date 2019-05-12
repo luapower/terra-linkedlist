@@ -302,7 +302,9 @@ local list_type = function(T, size_t)
 	return list_type(T, size_t or int, context_t or nil, own_elements ~= false)
 end
 
-low.arraylinkedlist = macro(function(T, size_t)
+arraylinkedlist = macro(function(T, size_t)
 	local list = list_type(T:astype(), size_t)
 	return `list(nil)
 end, list_type)
+
+return _M
